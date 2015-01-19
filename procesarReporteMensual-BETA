@@ -1,0 +1,1013 @@
+'Este código está licenciado bajo la licencia GNU GPL v3.0
+
+'MEJORA A FUTURO: Recortar aquellas interrupciones que abarquen más que el mes de evaluación
+
+'DESCRIPCIÓN: MACRO PARA PROCESAR LOS REPORTES MENSUALES DE OCURRENCIAS
+'Fecha de comienzo del desarrollo: 11/12/2014
+'Autor: Bruno Alexandro García Tejada
+'Ex-practicante de Ingeniería de OSIPTEL - Gerencia de Fiscalización y Supervisión - Subgerencia de Telecomunicaciones Rurales
+
+'CONCEPTOS BÁSICOS DE VBA NECESARIOS:
+'Definición y alcance de las variables
+'Condicionales IF
+'Bucles FOR y GO TO
+'Sub-procedimientos y funciones
+'Uso de ARRAYS dinámicos (N-dimensionales)
+'Uso de variables de tipo definido por el usuario
+'Cuadros de entrada de datos del usuario
+'Manipulación de variables tipo DATE y funciones relacionadas
+'Creación y manipulación de hojas de datos desde VBA
+
+'Option Explicit nos obliga a declarar todas las variables. En el caso no declaramos una variable, el compilador nos devuelve un error
+'Option Explicit
+
+'Defino mis variables de tipo personalizado (custom type variable)
+Public Type NumeroInterrumpido
+    numero As Double
+    fechaIniInt As Date
+    fechaFinInt As Date
+End Type
+
+Public Type InfoResultado
+     ubigeo As Double
+     horarioAtenc(1) As Date
+     perSobrelape(1) As Date
+     durSobrelape As Double
+     perSLAcotado(1) As Date
+     durFueraServ As Double
+     numerosInt As String
+     cantNumInt As Integer
+End Type
+
+Private misResultados() As InfoResultado
+Private cantRes As Integer
+
+'DECLARO VARIABLES PÚBLICAS SÓLO PARA ESTE MÓDULO (ESTAS VARIABLES PUEDEN CAMBIAR DESPUÉS DE SER INICIALIZADAS, PERO
+'POR CUESTIONES DE ORDEN, SE DECIDIÓ QUE DICHAS VARIABLES PÚBLICAS NO CAMBIARÁN DESPUÉS DE SER INICIALIZADAS)
+Private mainSheetName As String, resultsSheetName As String
+Private fidatos As Integer, ffdatos As Integer, colubg As Integer, colnum As Integer, colfio As Integer, colffo As Integer, coltr As Integer, colha As Integer
+
+Sub procesarReporteMensual()
+    'MUESTRO AVISOS IMPORTANTES SOBRE EL USO DE LA MACRO
+    MsgBox "AVISO I: LOS UBIGEOS DEBEN ESTAR UNIFORMIZADOS Y ORDENADOS DE FORMA CONTIGUA"
+    MsgBox "AVISO II: DEBE EXISTIR UNA COLUMNA QUE INDIQUE EL HORARIO DE ATENCIÓN DE ACUERDO AL FORMATO DE 24 HRS: 'HH:MM * HH:MM' (NO OLVIDAR LOS ESPACIOS EN BLANCO), DONDE '*' REPRESENTA A CUALQUIER CARÁCTER DISTINTO AL ESPACIO EN BLANCO, O A CUALQUIER CONJUNTO DE CARÁCTERES NO ESPACIADOS. EJEMPLOS DEL FORMATO CORRECTO: '07:00 - 19:00', '07:00 A 19:00', '07:00 A 19:00 HRS.'. EJEMPLOS DEL FORMATO INCORRECTO: '07:00-19:00', '07:00 19:00', '07:00 19:00 HRS.'"
+    MsgBox "AVISO III: EL NÚMERO DE FILAS TOTAL SE ADQUIERE A PARTIR DE LA ÚLTIMA CELDA (DE LA COLUMNA DE UBIGEOS) CON CONTENIDO"
+    MsgBox "AVISO IV: EL ALGORITMO FALLARÁ EN EL CASO EXISTA ALGUNA FILA SIN ALGUNO DE LOS SIGUIENTES DATOS: UBIGEO, TELÉFONO, FECHA DE INICIO DE LA OCURRENCIA, FECHA DE FIN DE LA OCURRENCIA, TUPS REPORTADOS Y HORARIO DE ATENCIÓN"
+    
+    'LE PIDO AL USUARIO SELECCIONAR EL ÁREA A PROCESAR Y OBTENGO LA FILA Y COLUMNA INICIAL Y FINAL DE DICHA ÁREA
+    'Dim fiarea As Integer, ffarea As Integer, ciarea As Integer, cfarea As Integer
+    'Call procesarAreaInput(fiarea, ffarea, ciarea, cfarea)
+    
+    'SOLICITO AL USUARIO INGRESAR EL NÚMERO DE LA FILA DESDE DONDE EMPIEZAN LOS DATOS Y LAS LETRAS CORRESPONDIENTES A LAS COLUMNAS DE INTERÉS
+    Call procesarTextInput("Ingrese la fila inicial de los datos", fidatos)
+    Call procesarTextInput("Ingrese la columna de los ubigeos:", colubg)
+    Call procesarTextInput("Ingrese la columna de los números:", colnum)
+    Call procesarTextInput("Ingrese la columna de la fecha de inicio de la ocurrencia:", colfio)
+    Call procesarTextInput("Ingrese la columna de la fecha de fin de la ocurrencia:", colffo)
+    Call procesarTextInput("Ingrese la columna de los TUPS reportados:", coltr)
+    Call procesarTextInput("Ingrese la columna del horario de atención:", colha)
+    
+    'CREO LA HOJA DE DATOS DE LOS RESULTADOS
+    Call crearResultsSheet
+    
+    'HALLO EL NÚMERO DE LA ÚLTIMA FILA CON ALGUNA CELDA (DE LA COLUMNA DE UBIGEOS) CON CONTENIDO
+        'Rows.count -> devuelve la última fila de posible uso de la hoja de datos
+        'Cells(Rows.count, colubg) -> devuelve el objeto correspondiente a la última celda de posible uso de la fila de ubigeos
+        'Cells(Rows.count, colubg).End(xlUp) -> es el equivalente de presionar END + UP estando en dicha última celda
+        'Cells(Rows.count, colubg).End(xlUp).Row -> devuelve el número de la última celda (de la fila de ubigeos) con contenido
+    ffdatos = Cells(Rows.count, colubg).End(xlUp).Row
+    
+    'RECORRO CADA UBIGEO, Y EJECUTO EL PROCEDIMIENTO PRINCIPAL (KERNEL) CADA VEZ SE DETECTE UN CAMBIO DE UBIGEO
+    'Defino las variables encargadas de almacenar el ubigeo de la iteración actual y el de la siguiente iteración
+    Dim UbgActual As Double, UbgSiguiente As Double
+    'Defino las variables encargadas de almacenar a las Filas correspondientes a la Primera y la Última Interrupción de una determinada Localidad
+    Dim filaPriIntLoc As Integer, filaUltIntLoc As Integer
+    'Inicializo a la Primera Interrupción de la primera localidad como
+    filaPriIntLoc = fidatos
+    'Recorro cada i-ésima fila de la hoja de datos
+    For i = fidatos To ffdatos
+        'Si me encuentro evaluando la última fila, defino al ubigeo siguiente como -1 (de esta forma logro que el ubigeo siguiente siempre sea distinto al actual)
+        If i = ffdatos Then
+            UbgActual = Cells(i, colubg).Value
+            UbgSiguiente = -1
+        'Si me encuentro evaluando cualquier otra fila, defino a los ubigeos de forma normal
+        Else
+            UbgActual = Cells(i, colubg).Value
+            UbgSiguiente = Cells(i + 1, colubg).Value
+        End If
+        
+        'Comparo el ubigeo de la i-ésima iteración (Ubigeo Actual) con el ubigeo siguiente (Ubigeo Siguiente)
+        'Si son distintos, entonces se ha detectado un cambio de ubigeo
+        If UbgActual <> UbgSiguiente Then
+            'Debido al cambio de ubigeo, puedo decir que la i-ésima fila actual, corresponde a la fila de la última interrupción de determinada localidad
+            filaUltIntLoc = i
+            'Ejecuto el Procedimiento Principal de la Macro (kernel viene de la raíz germánica Kern, que significa núcleo)
+            MsgBox "Localidad de Ubigeo: " & Str(UbgActual)
+            Call kernel(filaPriIntLoc, filaUltIntLoc, UbgActual)
+            'Una vez se ha procesado las interrupciones de determinado ubigeo, defino a la siguiente i-ésima fila, como la fila de la primera interrupción del siguiente ubigeo
+            filaPriIntLoc = i + 1
+        End If
+    Next i
+    
+End Sub
+
+'OJO: ESTA FUNCIÓN NO SE USA A LO LARGO DE TODO LA MACRO
+Sub procesarAreaInput(ByRef fiarea As Integer, ByRef ffarea As Integer, ByRef ciarea As Integer, ByRef cfarea As Integer)
+    'Defino el rango que almacenará las celdas dentro del área que definirá el usuario
+    Dim rng As Range
+    'Solicito al usuario que defina el área de procesamiento
+    Set rng = Application.InputBox(prompt:="Selecciona el área de procesamiento", Type:=8)
+    'Extraigo la primera y última fila así como también la primera y última columna que abarca el área de comparación
+    fiarea = rng.Row
+    ffarea = rng.Rows.count + fiarea - 1
+    ciarea = rng.Column
+    cfarea = rng.Columns.count + ciarea - 1
+End Sub
+
+Sub procesarTextInput(ByVal msj As String, ByRef numInput As Integer)
+    'Defino la variable que almacenará el texto que ingresará el usuario
+    Dim inputText As Variant    'La defino como Variant para poder usar esta variable como argumento de la función IsNumeric
+    'Solicito al usuario que ingrese un determinado texto
+    inputText = InputBox(msj)
+    'Si el texto ingresado no es numérico, lo convierto a su equivalente numérico (ejm: el equivalente de "G" es "7")
+    If IsNumeric(inputText) = False Then
+        'inputText & 1 -> Concatena la letra introducida con el número 1 (ejm: si el usuario ingreso la letra "G", el resultado sería "G1")
+        'Range(inputText & 1) -> Me devuelve el objeto correspondiente al rango indicado por "inputText & 1" (ejm: Range("G1") retorna el objeto relacionado con la celda G1)
+        'Range(inputText & 1).Column -> Retorna el número de la columna (en forma de texto) correspondiente al rango indicado por "inputText & 1" (ejm: Range("G1") devuelve 7)
+        'Int(Range(inputText & 1).Column) -> Convierte el número de la columna mencionada anteriormente, en forma de variable Int
+        numInput = Int(Range(inputText & 1).Column)
+    'Caso contrario, si el texto ingresado es numérico, lo convierto de variable String, a variable Int
+    Else
+        numInput = Int(inputText)
+    End If
+End Sub
+
+Private Sub crearResultsSheet()
+    'Obtengo el nombre de la actual hoja de datos activa
+    mainSheetName = ActiveSheet.Name
+    'Defino el nombre de la nueva hoja de datos de resultados
+    resultsSheetName = "Resultados" & Format(Now(), " hh mm ss AMPM")
+    'Creo la nueva hoja de datos de resultados
+    Worksheets.Add().Name = resultsSheetName
+    'Activo la nueva hoja de datos de resultados y creo los títulos de las columnas
+    Sheets(resultsSheetName).Activate
+    'Inserto el título de la hoja de datos
+    Cells(1, 1) = "HOJA DE DATOS DE RESULTADOS"
+    'Inserto el glosario de siglas
+    Cells(2, 1) = "HDA: Horario de Atención"
+    Cells(3, 1) = "IPDS: Inicio del Período De Sobrelape"
+    Cells(4, 1) = "FPDS: Fin del Período De Sobrelape"
+    Cells(5, 1) = "DDPS: Duración Del Período de Sobrelape"
+    Cells(6, 1) = "TUPS PSFS: TUPS Interrumpidos dentro del Período: de Sobrelape/Fuera de Servicio"
+    Cells(7, 1) = "TDS: Tiempo total De Sobrelape"
+    Cells(8, 1) = "IPFS: Inicio del Período Fuera de Servicio"
+    Cells(9, 1) = "FPFS: Fin del Período Fuera de Servicio"
+    Cells(10, 1) = "DPFS: Duración del Período Fuera de Servicio"
+    Cells(11, 1) = "TFS: Tiempo total Fuera de Servicio"
+    Cells(12, 1) = "CDT: Cantidad de TUPS Interrumpidos dentro del Período: de Sobrelape/Fuera de Servicio"
+    'Inserto los nombres de las columnas
+    Cells(12, 1) = "Ubigeo"     'Ubigeo de la localidad
+    Cells(12, 2) = "HDA"        'Horario de Atención
+    Cells(12, 3) = "IPDS"       'Inicio del Período De Sobrelape
+    Cells(12, 4) = "FPDS"       'Fin del Período De Sobrelape
+    Cells(12, 5) = "DDPS"       'Duración Del Período de Sobrelape
+    Cells(12, 6) = "TUPS PSFS"  'TUPS Interrumpidos dentro del Período: de Sobrelape/Fuera de Servicio
+    Cells(12, 7) = "TDS"        'Tiempo total De Sobrelape
+    Cells(12, 8) = "IPFS"       'Inicio del Período Fuera de Servicio
+    Cells(12, 9) = "FPFS"       'Fin del Período Fuera de Servicio
+    Cells(12, 10) = "DPFS"      'Duración del Período Fuera de Servicio
+    Cells(12, 11) = "TFS"       'Tiempo total Fuera de Servicio
+    Cells(12, 12) = "CDT"       'Cantidad de TUPS Interrumpidos dentro del Período: de Sobrelape/Fuera de Servicio
+    'Activo de nuevo a la hoja de datos principal
+    Sheets(mainSheetName).Activate
+End Sub
+
+Sub kernel(ByVal fiarea As Integer, ByVal ffarea As Integer, ByVal UbgActual As Double)
+
+    cantRes = 0
+    Erase misResultados
+    
+    'EXTRAIGO LA CANTIDAD N DE TUPS REPORTADOS EN EL MES, DESDE LA HOJA DE DATOS
+    Dim N As Integer
+    Call extraerCantTUPsRepor(fiarea, N)
+    
+    'HALLO EL MÍNIMO NÚMERO DE TUPS U, MAYOR AL 50% DE N
+    Dim U As Integer
+    Call hallarMinNumLinMayAl50PorCien(N, U)
+    
+    'EXTRAIGO EL INICIO Y FIN DEL HORARIO DE ATENCIÓN, DESDE LA HOJA DE DATOS
+    Dim CHA As Date, FHA As Date
+    Call extraerIniYFinDelHorarioDeAtencion(fiarea, CHA, FHA)
+    
+    'ALMACENO EN EL ARRAY Interrupciones A LAS INTERRUPCIONES MAYORES A 1 HORA
+    Dim Interrupciones() As NumeroInterrumpido
+    Call almacenarInterrupcionesValidas(fiarea, ffarea, CHA, FHA, Interrupciones)
+    
+    'ALMACENO TODAS LAS FECHAS SIN EXCEPCIÓN (TANTO LAS DE INICIO COMO LAS DE FIN) EN EL ARRAY TLF (Todas Las Fechas)
+    Dim TLF() As Date
+    Call almacenarTodasLasFechas(Interrupciones, TLF)
+    
+    'ALMACENO TODAS LAS FECHAS SIN EXCEPCIÓN Y SIN REPETIR VALORES, EN EL ARRAY FDE (Fechas De Evaluación)
+    Dim FDE() As Date
+    Call almacenarFechasSinRepeticion(TLF, FDE)
+    
+    'ORDENO EL ARRAY FDE DE FORMA ASCENDENTE, USANDO EL ALGORITMO BUBBLE SORT
+    Call bubbleSort(FDE)
+    
+    'ENCUENTRO LOS INTERVALOS DE TIEMPO DONDE SE SOBRELAPAN LAS INTERRUPCIONES Y LOS ALMACENO EN EL ARRAY PDS (Períodos De Sobrelape)
+    'ASÍ MISMO ALMACENO EN EL ARRAY DTIPS (Duración y TUPS Interrumpidos del Período de Sobrelape) A LA DURACIÓN Y A LA CANTIDAD DE TUPS INTERRUMPIDOS CORRESPONDIENTES A LOS PERÍODOS DE SOBRELAPE DEL ARRAY PDS
+    Dim PDS() As Date
+    Dim DTIPS() As Double
+    'Call realizarCruceDeInterrup(U, NDI, ILC, FDE, PDS, DTIPS)
+    
+    Dim Resultados() As InfoResultado
+    Call realizarCruceDeInterrup(UbgActual, CHA, FHA, U, Interrupciones, FDE, Resultados)
+    
+    'ESCRIBO EL RESULTADO EN OTRO WORKSHEET
+    Call escribirResultados(Resultados)
+    
+End Sub
+
+'OJO: FALTA COMENTAR
+Sub procesarInterrup(ByVal fiarea As Integer, ByVal ffarea As Integer, ByRef NDI() As Double, ByRef ILC() As Date)
+    Dim NILC As Integer
+    NILC = 0
+    Dim seRepite As Boolean
+    For f = fiarea To ffarea
+        'Si la interrupción dura más de una hora, la tomo en cuenta para el siguiente filtro
+        If DateDiff("s", Cells(f, colfio).Value, Cells(f, colffo).Value) > (60 * 60) Then
+            seRepite = False
+            For i = 0 To NILC - 1
+                If Cells(f, colnum).Value = NDI(i) And Cells(f, colfio).Value = ILC(0, i) And Cells(f, colffo).Value = ILC(1, i) Then
+                    seRepite = True
+                    Exit For
+                End If
+            Next i
+            If seRepite = False Then
+                NILC = NILC + 1
+                ReDim Preserve NDI(NILC - 1)
+                ReDim Preserve ILC(1, NILC - 1) 'Sólo se puede redimensionar la última dimensión de un array dinámico
+                NDI(NILC - 1) = Cells(f, colnum).Value
+                ILC(0, NILC - 1) = Cells(f, colfio).Value
+                ILC(1, NILC - 1) = Cells(f, colffo).Value
+            End If
+        End If
+    Next f
+End Sub
+
+'OJO: FALTA COMENTAR
+Sub almacenarInterrupcionesValidas(ByVal fiarea As Integer, ByVal ffarea As Integer, ByVal CHA As Date, ByVal FHA As Date, ByRef Interrupciones() As NumeroInterrumpido)
+    Dim NIV As Integer
+    NIV = 0
+    Dim FIDI As Date, FFDI As Date
+    For f = fiarea To ffarea
+        FIDI = Cells(f, colfio).Value
+        FFDI = Cells(f, colffo).Value
+        'Si la interrupción dura más de una hora, la tomo en cuenta para el siguiente filtro
+        If recortarColasYHallarDuracionFS(CHA, FHA, FIDI, FFDI) > (1# / 24) Then
+            NIV = NIV + 1
+            ReDim Preserve Interrupciones(NIV - 1)
+            Interrupciones(NIV - 1).fechaIniInt = Cells(f, colfio).Value
+            Interrupciones(NIV - 1).fechaFinInt = Cells(f, colffo).Value
+            Interrupciones(NIV - 1).numero = Cells(f, colnum).Value
+        End If
+    Next f
+End Sub
+
+Sub extraerIniYFinDelHorarioDeAtencion(ByVal fila As Integer, ByRef CHA As Date, ByRef FHA As Date)
+    Dim horarioDeAtencion As String
+    horarioDeAtencion = Cells(fila, colha).Value
+    Dim partes() As String
+    partes() = Split(horarioDeAtencion, " ")
+    CHA = TimeValue(partes(0))
+    FHA = TimeValue(partes(2))
+End Sub
+
+Sub extraerCantTUPsRepor(ByVal fiarea As Integer, ByRef N As Integer)
+    'Extraigo la cantidad de TUPS reportados desde la hoja de datos
+    N = Cells(fiarea, coltr).Value
+End Sub
+
+Sub hallarMinNumLinMayAl50PorCien(ByVal N As Integer, ByRef U As Integer)
+    'Si U es múltiplo de 2 ...
+    If N Mod 2 = 0 Then
+        U = N / 2 + 1
+    'Caso contrario ...
+    Else
+        U = Application.WorksheetFunction.Ceiling(N / 2, 1)
+    End If
+End Sub
+
+Sub almacenarTodasLasFechasANTIGUO(ByRef ILC() As Date, ByRef TLF() As Date)
+    'Antes de empezar, si el array ILC está vacío, no hago nada
+    If IsArrayEmpty(ILC) = True Then
+        Exit Sub
+    End If
+    
+    'Defino la variable que almacenará el tamaño del array TLF, y la inicializo como 0
+    Dim TTLF As Integer
+    TTLF = 0
+    'Almaceno todas las fechas sin excepción en el array TLF
+    For i = 0 To UBound(ILC, 2) 'UBound(ILC, 2) es el máximo índice de la segunda dimensión de ILC (dimensión horizontal)
+        'Aumento en uno a la variable TTLF
+        TTLF = TTLF + 1
+        'Aumento en uno al tamaño del array TLF
+        ReDim Preserve TLF(TTLF - 1)
+        'Almaceno la f-ésima fecha de inicio al final del array TLF
+        TLF(TTLF - 1) = ILC(0, i)
+        'Repito el mismo procedimiento pero para almacenar la f-ésima fecha de fin
+        TTLF = TTLF + 1
+        ReDim Preserve TLF(TTLF - 1)
+        TLF(TTLF - 1) = ILC(1, i)
+    Next i
+End Sub
+
+Sub almacenarTodasLasFechas(ByRef Interrupciones() As NumeroInterrumpido, ByRef TLF() As Date)
+    'Antes de empezar, si el array ILC está vacío, no hago nada
+    If ExistenIntVal(Interrupciones) = True Then
+        Exit Sub
+    End If
+    
+    'Defino la variable que almacenará el tamaño del array TLF, y la inicializo como 0
+    Dim TTLF As Integer
+    TTLF = 0
+    'Almaceno todas las fechas sin excepción en el array TLF
+    For i = 0 To UBound(Interrupciones)
+        'Aumento en uno a la variable TTLF
+        TTLF = TTLF + 1
+        'Aumento en uno al tamaño del array TLF
+        ReDim Preserve TLF(TTLF - 1)
+        'Almaceno la i-ésima fecha de inicio al final del array TLF
+        TLF(TTLF - 1) = Interrupciones(i).fechaIniInt
+        'Repito el mismo procedimiento pero para almacenar la i-ésima fecha de fin
+        TTLF = TTLF + 1
+        ReDim Preserve TLF(TTLF - 1)
+        TLF(TTLF - 1) = Interrupciones(i).fechaFinInt
+    Next i
+End Sub
+
+Sub almacenarFechasSinRepeticion(ByRef TLF() As Date, ByRef FDE() As Date)
+    'Antes de empezar, si el array TLF está vacío, no hago nada
+    If IsArrayEmpty(TLF) = True Then
+        Exit Sub
+    End If
+    
+    'Defino la variable NFDE, que almacenará el tamaño del array FDE, y la inicializo como 0
+    Dim NFDE As Integer
+    NFDE = 0
+    'Recorro cada FECHA y las almaceno, evitando repetir valores
+    For j = 0 To UBound(TLF)
+        'Asumo que la j-ésima fecha no se encuentra almacenada en el array FDE
+        seRepite = False
+        'Recorro cada fecha del vector FDE, y compruebo que la j-ésima fecha no este ya almacenada
+        For i = 0 To NFDE - 1
+            'Comparo la j-ésima fecha con las fechas del array FDE
+            If TLF(j) = FDE(i) Then
+                'Si son iguales, quiere decir que dicha j-ésima fecha ya está almacenada en el array FDE
+                seRepite = True
+                Exit For
+            End If
+        Next i
+        'Si dicha j-ésima fecha no se encuentra en el array FDE, entonces la almaceno en FDE
+        If seRepite = False Then
+            'Aumento en uno la variable NFDE
+            NFDE = NFDE + 1
+            'Aumento en uno el tamaño del array FDE
+            ReDim Preserve FDE(NFDE - 1)
+            'Almaceno la j-ésima fecha al final del array FDE
+            FDE(NFDE - 1) = TLF(j)
+        End If
+    Next j
+End Sub
+
+'Código ADAPTADO de (COMPROBAR EL ALGORITMO)
+Sub bubbleSort(ByRef list)
+    'Antes de empezar, si el array list está vacío, no hago nada
+    If IsArrayEmpty(list) = True Then
+        Exit Sub
+    End If
+    
+    ' Sorts an array using bubble sort algorithm
+    Dim First, Last, i, j  As Integer
+    Dim temp As Variant
+    
+    First = LBound(list)
+    Last = UBound(list)
+    For i = First To Last - 1
+        For j = i + 1 To Last
+            If list(i) > list(j) Then
+                temp = list(j)
+                list(j) = list(i)
+                list(i) = temp
+            End If
+        Next j
+    Next i
+End Sub
+
+Sub realizarCruceDeInterrupANTIGUO(ByVal U As Integer, ByRef NDI() As Double, ByRef ILC() As Date, ByRef FDE() As Date, ByRef PDS() As Date, ByRef DTIPS() As Double)
+    'Antes de empezar, si el array FDE está vacío, no hago nada
+    If IsArrayEmpty(FDE) = True Then
+        Exit Sub
+    End If
+    
+    'Defino la variable que almacenará el tamaño del array PDS y la inicializo como 0
+    Dim CPDS As Integer
+    CPDS = 0
+    'Defino el array NIPPE (Números con Interrupción en Progreso en el Período de Evaluación)
+    Dim NIPPE() As Double
+    'Defino la variable T que contará el número de eventos (TUPS interrumpidos) en progreso, en un determinado período de evaluación
+    Dim T As Integer
+    'Defino una variable booleana que me indique si un TUP con la interrupción en progreso, ya fue tomado en cuenta
+    Dim seRepite As String
+    'Defino las variables IDPE y FDPE (Inicio Del Período de Evaluación y Fin Del Período de Evaluación)
+    Dim IDPE, FDPE As Date
+    'Recorro cada i-ésimo Período De Evaluación y analizo si presenta más del 50% de números interrumpidos
+    For i = 0 To UBound(FDE) - 1
+        'Seteo el inicio y fin del i-ésimo período de evaluación
+        IDPE = FDE(i)
+        FDPE = FDE(i + 1)
+        'Inicializo la variable que almacenará el tamaño del array NIPPE (Seteo a 0 la cantidad de números interrumpidos del i-ésimo período de evaluación)
+        T = 0
+        'Reinicializo a 0 el tamaño del array de números interrumpidos en el i-ésimo período de evaluación
+        Erase NIPPE
+        'Recorro cada j-ésima interrupción del array ILC y verifico si dicha interrupción abarca el i-ésimo Período De Evaluación
+        For j = 0 To UBound(ILC, 2)
+            'Si la interrupción abarca el rango de tiempo [IDPE - FDPE], la tomo en cuenta para el siguiente filtro
+            If ILC(0, j) <= IDPE And ILC(1, j) >= FDPE Then
+                'Asumo que la j-ésima interrupción corresponde a un número que aún no ha sido tomado en cuenta
+                seRepite = False
+                'Comparo cada k-ésimo número del array NIPPE (número ya tomado en cuenta como interrumpido dentro del i-ésimo
+                'Período De Evaluación) con el número correspondiente a la j-ésima interrupción
+                For k = 0 To T - 1
+                    'Si la j-ésima interrupción ya fue tomada en cuenta para este i-ésimo Péríodo De Evaluación,
+                    'actualizo la variable seRepite
+                    If NDI(j) = NIPPE(k) Then
+                        seRepite = True
+                    End If
+                Next k
+                'Si la j-ésima interrupción aún no ha sido tomada en cuenta para este i-ésimo Péríodo De Evaluación,
+                'agrego el número correspondiente a dicha interrupción al array NIPPE
+                If seRepite = False Then
+                    T = T + 1
+                    ReDim Preserve NIPPE(T - 1)
+                    NIPPE(T - 1) = NDI(j)
+                End If
+            End If
+        Next j
+        'Si el i-ésimo Período De Interrupción presenta más del 50% de números interrumpidos,
+        'lo tomo en cuenta como Período De Sobrelape
+        If T >= U Then
+            'Almaceno la duración del período de sobrelape en la variable DPSD (Duración del Período de Sobrelape en Días)
+            Dim DPSD As Double
+            DPSD = DateDiff("s", IDPE, FDPE) / (60# * 60 * 24)
+            'Almaceno el período de sobrelape en el array PDS
+            CPDS = CPDS + 1
+            ReDim Preserve PDS(1, CPDS - 1)
+            PDS(0, CPDS - 1) = IDPE     'Almaceno la fecha de INICIO del período de sobrelape
+            PDS(1, CPDS - 1) = FDPE     'Almaceno la fecha de FIN del período de sobrelape
+            ReDim Preserve DTIPS(1, CPDS - 1)
+            DTIPS(0, CPDS - 1) = DPSD   'Almaceno la DURACIÓN del período de sobrelape
+            DTIPS(1, CPDS - 1) = T      'Almaceno la cantidad de TUPS interrumpidos dentro del Período de Sobrelape
+            
+            '''''''''
+            cantRes = cantRes + 1
+            ReDim Preserve misResultados(cantRes - 1)
+            misResultados(cantRes - 1).perSobrelape(0) = IDPE
+            misResultados(cantRes - 1).perSobrelape(1) = FDPE
+            ReDim Preserve misResultados(cantRes - 1).numInt(T - 1)
+            For k = 0 To UBound(NIPPE)
+                misResultados(cantRes - 1).numInt(k) = NIPPE(k)
+            Next k
+            misResultados(cantRes - 1).cantNumInt = T
+            misResultados(cantRes - 1).durSobrelape = DPSD
+            
+        End If
+    Next i
+End Sub
+
+Sub realizarCruceDeInterrup(ByVal UbgActual As Double, ByVal CHA As Date, ByVal FHA As Date, ByVal U As Integer, ByRef Interrupciones() As NumeroInterrumpido, ByRef FDE() As Date, ByRef Resultados() As InfoResultado)
+    'Antes de empezar, si el array FDE está vacío, no hago nada
+    If IsArrayEmpty(FDE) = True Then
+        Exit Sub
+    End If
+    
+    'Defino la variable que almacenará el tamaño del array Resultados y la inicializo como 0
+    Dim CPDS As Integer
+    CPDS = 0
+    'Defino el array NIPPE (Números con Interrupción en Progreso en el Período de Evaluación)
+    Dim NIPPE() As Double
+    'Defino la variable T que contará el número de eventos (TUPS interrumpidos) en progreso, en un determinado período de evaluación
+    Dim T As Integer
+    'Defino una variable booleana que me indique si un TUP con la interrupción en progreso, ya fue tomado en cuenta
+    Dim seRepite As String
+    'Defino las variables IDPE y FDPE (Inicio Del Período de Evaluación y Fin Del Período de Evaluación)
+    Dim IDPE As Date, FDPE As Date
+    'Recorro cada i-ésimo Período De Evaluación y analizo si presenta más del 50% de números interrumpidos
+    For i = 0 To UBound(FDE) - 1
+        'Seteo el inicio y fin del i-ésimo período de evaluación
+        IDPE = FDE(i)
+        FDPE = FDE(i + 1)
+        'Inicializo la variable que almacenará el tamaño del array NIPPE (Seteo a 0 la cantidad de números interrumpidos del i-ésimo período de evaluación)
+        T = 0
+        'Reinicializo a 0 el tamaño del array de números interrumpidos en el i-ésimo período de evaluación
+        Erase NIPPE
+        'Recorro cada j-ésima interrupción del array Interrupciones y verifico si dicha interrupción abarca el i-ésimo Período De Evaluación
+        For j = 0 To UBound(Interrupciones)
+            'Si la interrupción abarca el rango de tiempo [IDPE - FDPE], la tomo en cuenta para el siguiente filtro
+            If Interrupciones(j).fechaIniInt <= IDPE And Interrupciones(j).fechaFinInt >= FDPE Then
+                'Asumo que la j-ésima interrupción corresponde a un número que aún no ha sido tomado en cuenta
+                seRepite = False
+                'Comparo cada k-ésimo número del array NIPPE (número ya tomado en cuenta como interrumpido dentro del i-ésimo
+                'Período De Evaluación) con el número correspondiente a la j-ésima interrupción
+                For k = 0 To T - 1
+                    'Si la j-ésima interrupción ya fue tomada en cuenta para este i-ésimo Péríodo De Evaluación,
+                    'actualizo la variable seRepite
+                    If Interrupciones(j).numero = NIPPE(k) Then
+                        seRepite = True
+                    End If
+                Next k
+                'Si la j-ésima interrupción aún no ha sido tomada en cuenta para este i-ésimo Péríodo De Evaluación,
+                'agrego el número correspondiente a dicha interrupción al array NIPPE
+                If seRepite = False Then
+                    T = T + 1
+                    ReDim Preserve NIPPE(T - 1)
+                    NIPPE(T - 1) = Interrupciones(j).numero
+                End If
+            End If
+        Next j
+        'Si el i-ésimo Período De Interrupción presenta más del 50% de números interrumpidos,
+        'lo tomo en cuenta como Período De Sobrelape
+        If T >= U Then
+            'Almaceno la duración del período de sobrelape en la variable DPSD (Duración del Período de Sobrelape en Días)
+            Dim DPSD As Double
+            DPSD = DateDiff("s", IDPE, FDPE) / (60# * 60 * 24)
+            'Almaceno el período de sobrelape en el array PDS
+            CPDS = CPDS + 1
+            ReDim Preserve Resultados(CPDS - 1)
+            Resultados(CPDS - 1).perSobrelape(0) = IDPE     'Almaceno la fecha de INICIO del período de sobrelape
+            Resultados(CPDS - 1).perSobrelape(1) = FDPE     'Almaceno la fecha de FIN del período de sobrelape
+            Resultados(CPDS - 1).durSobrelape = DPSD   'Almaceno la DURACIÓN del período de sobrelape
+            Resultados(CPDS - 1).cantNumInt = T    'Almaceno la cantidad de TUPS interrumpidos dentro del Período de Sobrelape
+            'Almaceno los números interrumpidos dentro del Período de Sobrelape
+            For k = 0 To UBound(NIPPE)
+                Resultados(CPDS - 1).numerosInt = Resultados(CPDS - 1).numerosInt & vbNewLine & Str(NIPPE(k))
+            Next k
+            
+            Dim DPFS As Double
+            DPFS = recortarColasYHallarDuracionFS(CHA, FHA, IDPE, FDPE)
+            If DPFS > 0 Then
+                Resultados(CPDS - 1).perSLAcotado(0) = IDPE     'Almaceno la fecha de INICIO del período de sobrelape ACOTADO (o recortado)
+                Resultados(CPDS - 1).perSLAcotado(1) = FDPE   'Almaceno la fecha de FIN del período de sobrelape ACOTADO (o recortado)
+                Resultados(CPDS - 1).durFueraServ = DPFS
+            End If
+            
+            Resultados(CPDS - 1).horarioAtenc(0) = CHA
+            Resultados(CPDS - 1).horarioAtenc(1) = FHA
+            Resultados(CPDS - 1).ubigeo = UbgActual
+            
+        End If
+    Next i
+End Sub
+
+Sub realizarDescuento(ByVal CHA As Date, ByVal FHA As Date, ByRef PDS() As Date, ByRef DTIPS() As Double, ByRef PFS() As Date, ByRef DTIPFS() As Double)
+    'Antes de empezar, si el array PDS está vacío, no hago nada
+    If IsArrayEmpty(PDS) = True Then
+        Exit Sub
+    End If
+    
+    'Defino las variables IDPS y FDPS (Inicio Del Período de Sobrelape y Fin Del Período de Sobrelape)
+    Dim IDPS, FDPS As Date
+    'Defino la variable CPFS (Cantidad de Períodos Fuera de Servicio) que almacenará el tamaño del array PFS y la inicializo como 0
+    Dim CPFS As Integer
+    CPFS = 0
+    'Recorro cada i-ésimo Período De Sobrelape y proceso su fecha de inicio y de fin realizando lo siguiente (deacuerdo al caso):
+        'Nada
+        'Un recorte de las colas
+        'Una extensión de las colas
+        'Una eliminación del i-ésimo período de sobrelape
+    For i = 0 To UBound(PDS, 2) 'UBound(PDS, 2) es el máximo índice de la segunda dimensión de PDS (dimensión horizontal)
+        'Seteo el inicio y fin del i-ésimo período de sobrelape
+        IDPS = PDS(0, i)
+        FDPS = PDS(1, i)
+        'Definimos una variable booleana que permitirá diferenciar entre períodos de sobrelape INTER-DÍAS e INTRA-DÍAS
+        Dim esInterDias As Boolean
+        'Definimos una variable booleana que permitirá saber si un período de sobrelape es consecutivo (abarca dos días seguidos)
+        Dim esConsecutivo As Boolean
+        
+        'Definimos una variable que almacene la duración del período de sobrelape, en términos de días
+        Dim duracionEnDias As Integer
+        duracionEnDias = DateDiff("d", IDPS, FDPS)
+        'Si el inicio y fin del i-ésimo período de sobrelape NO están en el mismo día, es un período INTER-DÍAS
+        If duracionEnDias > 0 Then
+            esInterDias = True
+            'Si adicionalmente se trata de un período de sobrelape CONSECUTIVO (CASO D)
+            If duracionEnDias = 1 Then
+                esConsecutivo = True
+            End If
+        'Si el inicio y fin del i-ésimo período de sobrelape SI están en el mismo día, es un período INTRA-DÍAS
+        Else
+            esInterDias = False
+        End If
+        
+        'Descartamos los casos INTRA-DÍAS que no abarcan el horario de atención
+        If esInterDias = False Then
+            'SI SE TRATA DEL CASO G
+            FHA = obtenerSoloFecha(IDPS) + obtenerSoloHora(FHA)
+            If (IDPS >= FHA And FDPS > FHA) Then
+                GoTo NextIteration
+            End If
+            'SI SE TRATA DEL CASO H
+            CHA = obtenerSoloFecha(IDPS) + obtenerSoloHora(CHA)
+            If (IDPS < CHA And FDPS <= CHA) Then
+                GoTo NextIteration
+            End If
+        End If
+        
+        'Descartamos los casos INTER-DÍAS y CONSECUTIVOS que no abarcan ningún horario de atención
+        If esConsecutivo = True Then
+            'SI SE TRATA DEL CASO D
+            FHA = obtenerSoloFecha(IDPS) + obtenerSoloHora(FHA)
+            CHA = obtenerSoloFecha(FDPS) + obtenerSoloHora(CHA)
+            If (IDPS >= FHA And FDPS <= CHA) Then
+                GoTo NextIteration
+            End If
+        End If
+        
+        'Proceso la fecha de INICIO del i-ésimo período de sobrelape IDPS
+        CHA = obtenerSoloFecha(IDPS) + obtenerSoloHora(CHA)
+        If (IDPS < CHA) Then
+            'RECORTO LA COLA HASTA CHA
+            IDPS = CHA
+        End If
+        FHA = obtenerSoloFecha(IDPS) + obtenerSoloHora(FHA)
+        If (IDPS > FHA) Then
+            'EXTIENDO LA COLA HASTA FHA
+            IDPS = FHA
+        End If
+        
+        'Proceso la fecha de FIN del i-ésimo período de sobrelape FDPS
+        FHA = obtenerSoloFecha(FDPS) + obtenerSoloHora(FHA)
+        If (FDPS > FHA) Then
+            'RECORTO LA COLA HASTA FHA
+            FDPS = FHA
+        End If
+        CHA = obtenerSoloFecha(FDPS) + obtenerSoloHora(CHA)
+        If (FDPS < CHA) Then
+            'EXTIENDO LA COLA HASTA CHA
+            FDPS = CHA
+        End If
+        
+        'Hallo la duración del período fuera de servicio, enfocándonos sólo dentro del horario de atención
+        'Defino a la variable alfa y la variable resto que son el factor de reducción y la cantidad de días a restar, respectivamente
+        Dim alfa As Double, resto As Double
+        alfa = DateDiff("s", obtenerSoloHora(FHA), obtenerSoloHora(CHA)) / (60# * 60 * 24) + 1    'CHA-FHA+1
+        resto = DateDiff("d", IDPS, FDPS) * alfa
+        'Defino la Duración del período Fuera de Servicio
+        Dim DFS As Double
+        DFS = DateDiff("s", IDPS, FDPS) / (60# * 60 * 24) - resto
+        
+        'Almacenamos los períodos que no necesitan procesamiento
+        CPFS = CPFS + 1
+        ReDim Preserve PFS(1, CPFS - 1)
+        PFS(0, CPFS - 1) = IDPS
+        PFS(1, CPFS - 1) = FDPS
+        ReDim Preserve DTIPFS(1, CPFS - 1)
+        DTIPFS(0, CPFS - 1) = DFS
+        DTIPFS(1, CPFS - 1) = DTIPS(1, i)
+        
+        ''''''''
+        misResultados(i).perSLAcotado(0) = IDPS
+        misResultados(i).perSLAcotado(1) = FDPS
+        misResultados(i).durFueraServ = DFS
+        
+        
+NextIteration:
+
+    Next i
+End Sub
+
+Sub escribirResultadosANTIGUO(ByRef PDS() As Date, ByRef DTIPS() As Double, ByRef PFS() As Date, ByRef DTIPFS() As Double, ByVal UbgActual As Double)
+    'Antes de empezar, si el array PFS está vacío, no hago nada
+    If IsArrayEmpty(PFS) = True Then
+        Exit Sub
+    End If
+    
+    Sheets(resultsSheetName).Activate
+    Dim filaIniEscri As Integer
+    filaIniEscri = Cells(Rows.count, 1).End(xlUp).Row + 1
+    
+    Dim TDS As Double, TFS As Double
+    TDS = 0
+    TFS = 0
+    
+    'Siembre va a haber más Períodos De Sobrelape que Períodos Fuera de Servicio
+    For i = LBound(PDS, 2) To UBound(PDS, 2)
+        Cells(filaIniEscri + i, 1) = UbgActual
+        Cells(filaIniEscri + i, 2) = PDS(0, i)
+        Cells(filaIniEscri + i, 3) = PDS(1, i)
+        Cells(filaIniEscri + i, 4) = DTIPS(0, i)
+        Cells(filaIniEscri + i, 5) = DTIPS(1, i)
+        TDS = TDS + DTIPS(0, i)
+    Next i
+    
+    For i = LBound(PFS, 2) To UBound(PFS, 2)
+        Cells(filaIniEscri + i, 7) = PFS(0, i)
+        Cells(filaIniEscri + i, 8) = PFS(1, i)
+        Cells(filaIniEscri + i, 9) = DTIPFS(0, i)
+        Cells(filaIniEscri + i, 10) = DTIPFS(1, i)
+        TFS = TFS + DTIPFS(0, i)
+    Next i
+    
+    Cells(filaIniEscri, 6) = TDS
+    Cells(filaIniEscri, 11) = TFS
+    
+    Sheets(mainSheetName).Activate
+End Sub
+
+Sub escribirResultados(ByRef Resultados() As InfoResultado)
+    'Antes de empezar, si el array PFS está vacío, no hago nada
+    If ExistenResultados(Resultados) = True Then
+        Exit Sub
+    End If
+    
+    Sheets(resultsSheetName).Activate
+    Dim filaIniEscri As Integer
+    filaIniEscri = Cells(Rows.count, 1).End(xlUp).Row + 1
+    
+    Dim TDS As Double, TFS As Double
+    TDS = 0
+    TFS = 0
+    
+    'Siembre va a haber más Períodos De Sobrelape que Períodos Fuera de Servicio
+    For i = 0 To UBound(Resultados)
+        Cells(filaIniEscri + i, 1) = Resultados(i).ubigeo
+        Cells(filaIniEscri + i, 2) = Resultados(i).horarioAtenc(0) & " - " & Resultados(i).horarioAtenc(1)
+        Cells(filaIniEscri + i, 3) = Resultados(i).perSobrelape(0)
+        Cells(filaIniEscri + i, 4) = Resultados(i).perSobrelape(1)
+        Cells(filaIniEscri + i, 5) = Resultados(i).durSobrelape
+        Cells(filaIniEscri + i, 6) = Resultados(i).numerosInt
+        
+        Cells(filaIniEscri + i, 8) = Resultados(i).perSLAcotado(0)
+        Cells(filaIniEscri + i, 9) = Resultados(i).perSLAcotado(1)
+        Cells(filaIniEscri + i, 10) = Resultados(i).durFueraServ
+        
+        Cells(filaIniEscri + i, 12) = Resultados(i).cantNumInt
+        
+        TDS = TDS + Resultados(i).durSobrelape
+        TFS = TFS + Resultados(i).durFueraServ
+    Next i
+    
+    Cells(filaIniEscri, 7) = TDS
+    Cells(filaIniEscri, 11) = TFS
+    
+    Sheets(mainSheetName).Activate
+End Sub
+
+Sub escribirResultados2(ByRef PDS() As Date, ByRef DTIPS() As Double, ByRef PFS() As Date, ByRef DTIPFS() As Double, ByVal UbgActual As Double)
+    'Antes de empezar, si el array PFS está vacío, no hago nada
+    If IsArrayEmpty(PFS) = True Then
+        Exit Sub
+    End If
+    
+    Sheets(resultsSheetName).Activate
+    Dim filaIniEscri As Integer
+    filaIniEscri = Cells(Rows.count, 1).End(xlUp).Row + 1
+    
+    Dim TDS As Double, TFS As Double
+    TDS = 0
+    TFS = 0
+    
+    'Siembre va a haber más Períodos De Sobrelape que Períodos Fuera de Servicio
+    For i = 0 To UBound(misResultados)
+        Cells(filaIniEscri + i, 1) = UbgActual
+        Cells(filaIniEscri + i, 2) = misResultados(i).perSobrelape(0)
+        Cells(filaIniEscri + i, 3) = misResultados(i).perSobrelape(1)
+        Cells(filaIniEscri + i, 4) = misResultados(i).durSobrelape
+        Cells(filaIniEscri + i, 5) = misResultados(i).cantNumInt
+        Cells(filaIniEscri + i, 7) = misResultados(i).perSLAcotado(0)
+        Cells(filaIniEscri + i, 8) = misResultados(i).perSLAcotado(1)
+        Cells(filaIniEscri + i, 9) = misResultados(i).durFueraServ
+        Cells(filaIniEscri + i, 10) = misResultados(i).cantNumInt
+        TDS = TDS + DTIPS(0, i)
+        TFS = TFS + DTIPFS(0, i)
+    Next i
+    
+    Cells(filaIniEscri, 6) = TDS
+    Cells(filaIniEscri, 11) = TFS
+    
+    Sheets(mainSheetName).Activate
+End Sub
+
+
+'FUNCIONES:
+Function recortarColasYHallarDuracionFS(ByVal CHA As Date, ByVal FHA As Date, ByRef FINI As Date, ByRef FFIN As Date) As Double
+'Esta función devuelve la duración fuera de servicio de un período de tiempo definido por [FINI FFIN]. Adicionalmente, esta función modifica los
+'argumentos FINI y FFIN, devolviendo dichas fechas recortadas
+'OJO: Esta función devuelve -1 cuando el período no abarca el horario de atención de ningún día
+
+
+    'Definimos una variable booleana que permitirá diferenciar entre períodos INTER-DÍAS e INTRA-DÍAS
+    Dim esInterDias As Boolean
+    'Definimos una variable booleana que permitirá saber si un período es CONSECUTIVO (abarca dos días seguidos)
+    Dim esConsecutivo As Boolean
+    
+    'Definimos una variable que almacene la duración del período, en términos de días
+    Dim duracionEnDias As Integer
+    duracionEnDias = DateDiff("d", FINI, FFIN)
+    'Si el inicio y fin del i-ésimo período NO están en el mismo día, es un período INTER-DÍAS
+    If duracionEnDias > 0 Then
+        esInterDias = True
+        'Si adicionalmente se trata de un período CONSECUTIVO (CASO D)
+        If duracionEnDias = 1 Then
+            esConsecutivo = True
+        End If
+    'Si el inicio y fin del i-ésimo período SI están en el mismo día, es un período INTRA-DÍAS
+    Else
+        esInterDias = False
+    End If
+    
+    'Descartamos los casos INTRA-DÍAS que no abarcan el horario de atención
+    If esInterDias = False Then
+        'SI EL PERÍODO SE ENCUENTRA DESPUÉS DEL HORARIO DE ATENCIÓN (CASO G)
+        FHA = obtenerSoloFecha(FINI) + obtenerSoloHora(FHA)
+        If (FINI >= FHA And FFIN > FHA) Then
+            recortarColasYHallarDuracionFS = -1
+            Exit Function
+        End If
+        'SI EL PERÍODO SE ENCUENTRA ANTES DEL HORARIO DE ATENCIÓN (CASO H)
+        CHA = obtenerSoloFecha(FINI) + obtenerSoloHora(CHA)
+        If (FINI < CHA And FFIN <= CHA) Then
+            recortarColasYHallarDuracionFS = -1
+            Exit Function
+        End If
+    End If
+    
+    'Descartamos los casos INTER-DÍAS y CONSECUTIVOS que no abarcan ningún horario de atención
+    If esConsecutivo = True Then
+        'SI EL PERÍODO COMIENZA EL DÍA "A" DESPUÉS DEL HORARIO DE ATENCIÓN, Y TERMINA EL DÍA "B" ANTES DEL HORARIO DE ATENCIÓN (CASO D)
+        FHA = obtenerSoloFecha(FINI) + obtenerSoloHora(FHA)
+        CHA = obtenerSoloFecha(FFIN) + obtenerSoloHora(CHA)
+        If (FINI >= FHA And FFIN <= CHA) Then
+            recortarColasYHallarDuracionFS = -1
+            Exit Function
+        End If
+    End If
+    
+    'Una vez descartados los anteriores casos, sólo me queda procesar los períodos INTER-DÍAS que SÍ abarcan el horario de atención de 1 día o más
+    
+    'Proceso la fecha de inicio FINI del período
+    'SI EL PERÍODO COMIENZA ANTES DEL HORARIO DE ATENCIÓN
+    CHA = obtenerSoloFecha(FINI) + obtenerSoloHora(CHA)
+    If (FINI < CHA) Then
+        'RECORTO LA COLA HASTA CHA
+        FINI = CHA
+    End If
+    'SI EL PERÍODO COMIENZA DESPUÉS DEL HORARIO DE ATENCIÓN
+    FHA = obtenerSoloFecha(FINI) + obtenerSoloHora(FHA)
+    If (FINI > FHA) Then
+        'EXTIENDO LA COLA HASTA FHA
+        FINI = FHA
+    End If
+    'Si no se cumplió ninguna de las 2 condiciones anteriores, entonces el período comienza dentro del horario de atención, por lo cuál no se necesita procesamiento
+    
+    'Proceso la fecha de FIN del período
+    'SI EL PERÍODO TERMINA DESPUÉS DEL HORARIO DE ATENCIÓN
+    FHA = obtenerSoloFecha(FFIN) + obtenerSoloHora(FHA)
+    If (FFIN > FHA) Then
+        'RECORTO LA COLA HASTA FHA
+        FFIN = FHA
+    End If
+    'SI EL PERÍODO TERMINA ANTES DEL HORARIO DE ATENCIÓN
+    CHA = obtenerSoloFecha(FFIN) + obtenerSoloHora(CHA)
+    If (FFIN < CHA) Then
+        'EXTIENDO LA COLA HASTA CHA
+        FFIN = CHA
+    End If
+    'Si no se cumplió ninguna de las 2 condiciones anteriores, entonces el período termina dentro del horario de atención, por lo cuál no se necesita procesamiento
+    
+    'Hallo la duración del período fuera de servicio, considerando sólo los intervalos dentro del horario de atención
+    'Defino a la variable alfa y la variable resto que son el factor de reducción y la cantidad de días a restar, respectivamente
+    Dim alfa As Double, resto As Double
+    alfa = 1 - DateDiff("s", obtenerSoloHora(CHA), obtenerSoloHora(FHA)) / (60# * 60 * 24)  '1-(FHA-CHA)
+    resto = DateDiff("d", FINI, FFIN) * alfa
+    'Hallo la Duración del período Fuera de Servicio
+    recortarColasYHallarDuracionFS = DateDiff("s", FINI, FFIN) / (60# * 60 * 24) - resto
+        
+End Function
+
+Function obtenerSoloFecha(ByVal fechaConHora) As Date
+    obtenerSoloFecha = DateSerial(Year(fechaConHora), Month(fechaConHora), Day(fechaConHora))
+End Function
+
+Function obtenerSoloHora(ByVal fechaConHora) As Date
+    obtenerSoloHora = TimeSerial(Hour(fechaConHora), Minute(fechaConHora), Second(fechaConHora))
+End Function
+
+'Función extraída de la página: http://www.cpearson.com/excel/vbaarrays.htm
+Function IsArrayEmpty(ByRef Arr As Variant) As Boolean
+
+    Dim LB As Long
+    Dim UB As Long
+    
+    Err.Clear
+    On Error Resume Next
+    
+    ' Attempt to get the UBound of the array. If the array is
+    ' unallocated, an error will occur.
+    UB = UBound(Arr, 1)
+    If (Err.Number <> 0) Then
+        IsArrayEmpty = True
+    Else
+        ''''''''''''''''''''''''''''''''''''''''''
+        ' On rare occassion, under circumstances I
+        ' cannot reliably replictate, Err.Number
+        ' will be 0 for an unallocated, empty array.
+        ' On these occassions, LBound is 0 and
+        ' UBoung is -1.
+        ' To accomodate the weird behavior, test to
+        ' see if LB > UB. If so, the array is not
+        ' allocated.
+        ''''''''''''''''''''''''''''''''''''''''''
+        Err.Clear
+        LB = LBound(Arr)
+        If LB > UB Then
+            IsArrayEmpty = True
+        Else
+            IsArrayEmpty = False
+        End If
+    End If
+    
+End Function
+
+'Lo mismo que la función IsArrayEmpty pero para un array de variables tipo "NumeroInterrumpido"
+Function ExistenIntVal(ByRef Arr() As NumeroInterrumpido) As Boolean
+
+    Dim LB As Long
+    Dim UB As Long
+    
+    Err.Clear
+    On Error Resume Next
+    
+    ' Attempt to get the UBound of the array. If the array is
+    ' unallocated, an error will occur.
+    UB = UBound(Arr, 1)
+    If (Err.Number <> 0) Then
+        ExistenIntVal = True
+    Else
+        ''''''''''''''''''''''''''''''''''''''''''
+        ' On rare occassion, under circumstances I
+        ' cannot reliably replictate, Err.Number
+        ' will be 0 for an unallocated, empty array.
+        ' On these occassions, LBound is 0 and
+        ' UBoung is -1.
+        ' To accomodate the weird behavior, test to
+        ' see if LB > UB. If so, the array is not
+        ' allocated.
+        ''''''''''''''''''''''''''''''''''''''''''
+        Err.Clear
+        LB = LBound(Arr)
+        If LB > UB Then
+            ExistenIntVal = True
+        Else
+            ExistenIntVal = False
+        End If
+    End If
+    
+End Function
+
+'Lo mismo que la función IsArrayEmpty pero para un array de variables tipo "InfoResultado"
+Function ExistenResultados(ByRef Arr() As InfoResultado) As Boolean
+
+    Dim LB As Long
+    Dim UB As Long
+    
+    Err.Clear
+    On Error Resume Next
+    
+    ' Attempt to get the UBound of the array. If the array is
+    ' unallocated, an error will occur.
+    UB = UBound(Arr, 1)
+    If (Err.Number <> 0) Then
+        ExistenResultados = True
+    Else
+        ''''''''''''''''''''''''''''''''''''''''''
+        ' On rare occassion, under circumstances I
+        ' cannot reliably replictate, Err.Number
+        ' will be 0 for an unallocated, empty array.
+        ' On these occassions, LBound is 0 and
+        ' UBoung is -1.
+        ' To accomodate the weird behavior, test to
+        ' see if LB > UB. If so, the array is not
+        ' allocated.
+        ''''''''''''''''''''''''''''''''''''''''''
+        Err.Clear
+        LB = LBound(Arr)
+        If LB > UB Then
+            ExistenResultados = True
+        Else
+            ExistenResultados = False
+        End If
+    End If
+    
+End Function
+
